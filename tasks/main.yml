@@ -12,18 +12,9 @@
           enabled: yes
 
 - name: Kubernetes repo alternate
-  shell: |
-          cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
-          [kubernetes]
-          name=Kubernetes
-          baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch
-          enabled=1
-          gpgcheck=1
-          repo_gpgcheck=1
-          gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
-          exclude=kubelet kubeadm kubectl
-          EOF
-
+  copy:
+          src: kubernetes.repo
+          dest: /etc/yum.repos.d/kubernetes.repo
 
 
 - name: Installing softwares
@@ -43,21 +34,24 @@
           enabled: yes
 
 - name: pull config images
-  command: kubeadm config images pull
+  command: "kubeadm config images pull"
 
-- name: initialise cidr
-  shell: kubeadm init --pod-network-cidr={{ cidr }} --ignore-preflight-errors=NumCPU --ignore-preflight-errors=Mem 
 
 - name: change docker configuration
-  file:
+  copy:
     src: daemon.json
-    dest: etc/docker/daemon.json
+    dest: /etc/docker/daemon.json
 
 
 - name: restart docker
   service:
           name: docker
           state: restarted
+
+- name: Install ip-route tc
+  package:
+          name: iproute-tc
+          state: present
 
 - name: make routing policy
   copy:
@@ -67,26 +61,32 @@
 - name: enable system
   shell: "sysctl --system"
 
-- name: Install ip-route tc
-  package:
-          name: iproute-tc
-          state: present
-
 - name: start the master
   shell: "kubeadm init --pod-network-cidr={{ cidr }} --ignore-preflight-errors=NumCPU --ignore-preflight-errors=Mem"
   ignore_errors: True
 
-- name: config file setup
-  shell: |
-          mkdir -p $HOME/.kube
-          sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-          sudo chown $(id -u):$(id -g) $HOME/.kube/config
+- name: setup master as a client
+  file:
+          path: $HOME/.kube
+          state: directory
+
+- name: Setup master as a client
+  shell: "cp -i /etc/kubernetes/admin.conf $HOME/.kube/config"
+  ignore_errors: True
+
+- name: Setup master as client
+  shell: "chown $(id -u):$(id -g) $HOME/.kube/config"
+  ignore_errors: True
 
 - name: free some RAM caches
   shell: "echo 3 > /proc/sys/vm/drop_caches"
 
 - name: apply CNI plugins
-  shell: "kubectl apply  -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml"
+  shell: "kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml"
+  ignore_errors: True
+
+- name: delete existing pods
+  shell: "kubectl delete pods -l app=flannel -n kube-system"
 
 - name: Get join token
   command: "kubeadm token create --print-join-command"
